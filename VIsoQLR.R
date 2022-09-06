@@ -49,12 +49,40 @@ bed_data_loading <- function(input_path){
 }
 
 
+transcript_data_loading <- function(input_path,  inputformat = "GTF"){
+  if (inputformat == "GTF") {separation = " "}
+  if (inputformat == "GFF3") {separation = "="}
+  
+  gtf = read.delim(input_path, header = FALSE, comment.char = "#", stringsAsFactors = FALSE)
+  
+  transcripts = gtf[gtf$V3 == "transcript","V9"]
+  transcriptinfo = gsub("; ", ";", transcripts)
+  transcriptinfo = do.call("rbind", strsplit(x = transcriptinfo, split = ";"))
+  cnames = do.call("rbind", strsplit(x = transcriptinfo[1,], split = separation))[,1]
+  transcriptinfo = gsub("^.* ", "", transcriptinfo, perl = T)
+  colnames(transcriptinfo) = cnames
+  
+  gtf = gtf[gtf$V3 == "exon", c("V1", "V4","V5","V9", "V6")]
+  colnames(gtf) = c("gene", "start", "end", "id", "score")
+  gtf$score = as.numeric(gtf$score)
+  gtf$id=gsub("^.*transcript_id ", "", gtf$id, perl = TRUE)
+  gtf$id=gsub(";.*$", "", gtf$id, perl = TRUE)
+  
+  gtf = merge(gtf, transcriptinfo, by.x = "id", by.y = "transcript_id")
+  
+  # Size annotation
+  gtf_split = split(gtf, gtf$id)
+  gtf_lengths = unlist(lapply(gtf_split, function(x) sum(x$end - x$start)))
+  gtf$size = paste0(gtf_lengths[gtf$id], "bp")
+  
+  return(gtf)
+}
 
 
 #########################
 # Break point functions #
 #########################
-break_point_calculation  <- function(raw_exons, num_reads_post_trimming, breakpoint_freq_threshold=5, very_close_bp=3, breakpoint_padding=5){
+break_point_calculation  <- function(raw_exons, num_reads_post_trimming, breakpoint_freq_threshold=3, very_close_bp=3, breakpoint_padding=5){
   
   # Break points frequency
   start_count = table(raw_exons$start)
@@ -265,10 +293,11 @@ exon_definition <- function(bp_asigned_exons){
   exon_id_filter = unique(c(exon_id_filter1, exon_id_filter2, exon_id_filter3))
   defined_exons = bp_asigned_exons[!bp_asigned_exons$id %in% exon_id_filter,]
   
-  max_with = max(floor(log10(c(defined_exons$start_tag, defined_exons$end_tag))) + 1)
-  start_tag_formated = formatC(defined_exons$start_tag, width = max_with, flag = "0", digits = max_with)
-  end_tag_formated = formatC(defined_exons$end_tag, width = max_with, flag = "0", digits = max_with)
-  defined_exons$coordinates = paste(start_tag_formated, end_tag_formated, sep = "-")
+  # max_with = max(floor(log10(c(defined_exons$start_tag, defined_exons$end_tag))) + 1)
+  # start_tag_formated = formatC(defined_exons$start_tag, width = max_with, flag = "0", digits = max_with)
+  # end_tag_formated = formatC(defined_exons$end_tag, width = max_with, flag = "0", digits = max_with)
+  # defined_exons$coordinates = paste(start_tag_formated, end_tag_formated, sep = "-")
+  defined_exons$coordinates = paste(defined_exons$start_tag, defined_exons$end_tag, sep = "-")
   
   return(list(defined_exons,exon_id_filter))
 }
@@ -370,10 +399,11 @@ read_clasification_fun <- function(all_ids, no_consensus_ids, classified_ids){
 ################
 # Data to plot #
 ################
-isoform_df_plot <- function(isoform_frequencies){
+isoform_df_plot_fun <- function(isoform_frequencies){
   isoforms = as.character(isoform_frequencies$read_isoform)
   isoform_num = 1
-  x_pos = c()
+  x_pos_start = c()
+  x_pos_end = c()
   tipo = c()
   exon = c()
   y_pos = c()
@@ -391,30 +421,27 @@ isoform_df_plot <- function(isoform_frequencies){
     isoform_num = isoform_num + 1
     
     positions = strsplit(isoform_frequencies[i,1], split = "_")[[1]]
-    exon_num = 1
-    
+
     for (j in positions){
       
       start = as.numeric(gsub("\\*", "", strsplit(j, split = "-")[[1]][1]))
       end = as.numeric(gsub("\\*", "", strsplit(j, split = "-")[[1]][2]))
       
-      x_pos = c(x_pos, start, end)
-      tipo = c(tipo, "start", "end")
-      exon = c(exon, exon_num, exon_num)
-      y_pos = c(y_pos, isoform_id, isoform_id)
-      perc = c(perc, isoform_frequencies[i,3], isoform_frequencies[i,3])
-      star_stop = c(star_stop, j, j)
+      x_pos_start = c(x_pos_start, start)
+      x_pos_end = c(x_pos_end, end)
+      y_pos = c(y_pos, isoform_id)
+      perc = c(perc, isoform_frequencies[i,3])
+      star_stop = c(star_stop, j)
       
-      exon_num = exon_num + 1
     }
   }
   
-  x_pos = as.integer(x_pos)
-  df_pos = data.frame(x_pos, tipo, exon, y_pos, perc, star_stop)
+  x_pos_start = as.integer(x_pos_start)
+  x_pos_end = as.integer(x_pos_end)
+  df_pos = data.frame(x_pos_start, x_pos_end, y_pos, perc, star_stop, stringsAsFactors = F)
   
-  df_pos$paste_pair = paste(df_pos$exon, df_pos$y_pos, sep = "_")
   df_pos$y_pos = ordered(df_pos$y_pos, rev(isoform_id_all))
-
+  df_pos$grupo = "VisoQLR detected isoforms"
   
   return(df_pos)
 }
@@ -422,7 +449,7 @@ isoform_df_plot <- function(isoform_frequencies){
 
 
 # Break point superplot
-break_point_freq <- function(raw_exons){
+break_point_freq_fun <- function(raw_exons){
   
   num_reads_initial = length(unique(raw_exons$id))
   
@@ -451,45 +478,27 @@ break_point_freq <- function(raw_exons){
 # Plot functions #
 ##################
 
-gg_color_hue <- function(n) {
-  hues = seq(15, 375, length = n + 1)
-  hcl(h = hues, l = 65, c = 100)[1:n]
-}
+# gg_color_hue <- function(n) {
+#   hues = seq(15, 375, length = n + 1)
+#   hcl(h = hues, l = 65, c = 100)[1:n]
+# }
 
 
-isoform_plot <- function(df_pos, abundance){
-  # ggplotly(ggplot(df_pos[df_pos$perc >= abundance,], aes(x = x_pos, y = y_pos, color = star_stop)) +
-  #   geom_line(color="blue", size = 0.2) +
-  #   geom_line(aes(group = paste_pair), size = 3) +
-  #   # ylab("Isoform ID (% of reads)") +
-  #   # labs(color = "Exon coordinates") +
-  #   # coord_cartesian(c(inicio,final)) +
-  #   theme_minimal() +
-  #   theme(panel.grid = element_blank()) +
-  #   theme(axis.title.x=element_blank(),
-  #         axis.text.x=element_blank(),
-  #         axis.ticks.x=element_blank()) +
-  #   theme(plot.background = element_rect(fill = "white", colour = "white"))
-  #   )%>% layout(xaxis = list(title = "Sequence position"),
-  #               yaxis = list(title = "Isoform ID (% of reads)", fixedrange=TRUE),
-  #               legend = list(title = list(text="Exon coordinates")))
-
-  df_pos = df_pos[df_pos$perc >= abundance,]
-  df_pos = df_pos[df_pos$tipo == "start",]
-  df_pos$x_pos_end = as.numeric(gsub(".*-", "", df_pos$star_stop, perl = T))
+isoform_plot_fun <- function(df_pos, ylabel, pal = NULL, start_end_levels, showlegend){
+  df_pos$star_stop = factor(df_pos$star_stop, levels = start_end_levels)
   
   df_pos %>%
-    plot_ly() %>%
+    plot_ly(colors = pal) %>%
     add_lines(
-              x = ~x_pos, y = ~y_pos,
-              showlegend = FALSE, split = ~y_pos, color = I("blue"), size = I(0.8)
+      x = ~x_pos_start, y = ~y_pos,
+      showlegend = FALSE, split = ~y_pos, color = I("blue"), size = I(0.8)
     )%>%
     add_segments(
-      x = ~x_pos, y = ~y_pos,
+      x = ~x_pos_start, y = ~y_pos,
       xend = ~x_pos_end, yend = ~y_pos, 
-      split = ~star_stop, size = I(10)
+      split = ~star_stop, size = I(10), color = ~star_stop, legendgroup = ~star_stop, showlegend = showlegend
     )%>% layout(xaxis = list(title = "Sequence position", showgrid = FALSE),
-                yaxis = list(title = "Isoform ID | % of reads| size", fixedrange=TRUE, showgrid = FALSE),
+                yaxis = list(title = ylabel, fixedrange=TRUE, showgrid = FALSE),
                 legend = list(title = list(text="Exon coordinates")))
 }
 
@@ -503,7 +512,8 @@ isoform_plot <- function(df_pos, abundance){
 
 
 
-break_point_freq_plot <- function(df_superplot, break_points, start_dt, end_dt){
+
+break_point_freq_plot_fun <- function(df_superplot, break_points, start_dt, end_dt){
   
   # Assign colors
   df_superplot$current_color[df_superplot$tipo == "start"] = "#2166AC"
@@ -570,12 +580,18 @@ break_point_freq_plot <- function(df_superplot, break_points, start_dt, end_dt){
 
 
 
-multiplot_fun <- function(isoform_plot, break_point_freq_plot, num_iso, iso_pixels, histo_pixels){
+multiplot_fun1 <- function(isoform_plot, break_point_freq_plot, num_iso, iso_pixels, histo_pixels){
   subplot(isoform_plot, break_point_freq_plot, 
-          nrows = 2, margin = 0, 
+          nrows = 2, margin = 0.03, 
           shareX = TRUE, titleX = T, titleY = T,
           heights = c(num_iso*iso_pixels/(num_iso*iso_pixels+histo_pixels), histo_pixels/(num_iso*iso_pixels+histo_pixels)))
+}
 
+multiplot_fun2 <- function(isoform_plot1, isoform_plot2, break_point_freq_plot, num_iso1, num_iso2, iso_pixels, histo_pixels){
+  subplot(isoform_plot1, isoform_plot2, break_point_freq_plot, 
+          nrows = 3, margin = 0.03, 
+          shareX = TRUE, titleX = T, titleY = T,
+          heights = c(num_iso1*iso_pixels/(num_iso1*iso_pixels+num_iso2*iso_pixels+histo_pixels), num_iso2*iso_pixels/(num_iso1*iso_pixels+num_iso2*iso_pixels+histo_pixels),histo_pixels/(num_iso1*iso_pixels+num_iso2*iso_pixels+histo_pixels)))
 }
 
 
@@ -686,7 +702,8 @@ ui <- fluidPage(
         h3("Input"),
         radioButtons("inputtype", "Input format", c("GFF3", "BED6"), selected="GFF3"),
         fileInput("inputfile", "Input file"),
-        uiOutput("known_sites_wait")
+        uiOutput("known_sites_wait"),
+        uiOutput("transcripts_data_wait")
         # fileInput("reference", "Reference sequence"),
       ),
       uiOutput("input_wait_sidebarpanel"),
@@ -718,24 +735,34 @@ server <- function(input, output) {
     tagList(
       wellPanel(
         h3("Download"), 
-        uiOutput("download_params")
+        shinyDirButton('output', 'Download directory', 'Please select a folder', FALSE),
+        textOutput("output_dir"),
+        textInput(inputId='prefix_output', label='Output prefix', 
+                  value = gsub("(.gff3|.gff|.bed|.bed6|.bed12)$", "", input$inputfile$name, perl = T)),
+        actionButton("save_apply", "Save")
       ),
       
       wellPanel(
         h3("Analysis window"),
-        uiOutput("select_gene"),
+        selectInput(inputId='selectgene', label='Select gene', choices = unique(rv$orig$gene)),
         uiOutput("studied_range")
       ),
       
       
       wellPanel(
         h3("Automatic peak detection"),
-        uiOutput("automatic_peak_detection")
+        numericInput("peak_threshold", "Read threshold (%)", min = 0, max = 100, value = 3),
+        numericInput("padding", "Padding (# of bases)", min = 0, step = 1, value = 5),
+        numericInput("very_close_bp", "Merge close splice sites (# of bases)", min = 0, step = 1, value = 3),
+        actionButton("peak_detection_apply", "Apply")
       ),
       
       wellPanel(
         h3("Display options"),
-        uiOutput("plot_visual_variables")
+        numericInput("abundance", "Isoform abundance threshold to display (%)", min = 0, max = 100, value = 1),
+        sliderInput("iso_pixels", "Isoform separation (px)", min = 10, max = 40, value = 20, step = 1, round = TRUE),
+        sliderInput("histo_pixels", "Barplot height (px)", min = 100, max = 500, value = 250, step = 10, round = TRUE),
+        actionButton("abundance_apply", "Apply")
       ),
     )
   })
@@ -750,9 +777,9 @@ server <- function(input, output) {
       
       
       fluidRow(class = "well",
-               column(6, class = "well", h3("Exonic starting points"), DTOutput('start_dto'), uiOutput("start_bp_add_wait")),
-               column(6, class = "well", h3("Exonic ending points"), DTOutput('end_dto'), uiOutput("end_bp_add_wait")),
-               fluidRow(column(12, align = "center",uiOutput("break_point_apply_wait"))),
+               column(6, class = "well", h3("Exonic starting points"), DTOutput('start_dto'), actionButton("start_bp_add", "Add row")),
+               column(6, class = "well", h3("Exonic ending points"), DTOutput('end_dto'), actionButton("end_bp_add", "Add row")),
+               fluidRow(column(12, align = "center",actionButton("break_point_apply", "Apply changes"))),
       ),
       
       fluidRow(class = "well",
@@ -761,6 +788,7 @@ server <- function(input, output) {
       ),
     )
   })
+  
   
   
   
@@ -797,10 +825,7 @@ server <- function(input, output) {
   #############################
   # Gene selection to analyce #
   #############################
-  output$select_gene<-renderUI({
-    req(rv$orig)
-    selectInput(inputId='selectgene', label='Select gene', choices = unique(rv$orig$gene))
-  })
+
   
   observeEvent(ignoreInit=T, c( 
     input$selectgene
@@ -857,16 +882,7 @@ server <- function(input, output) {
   ##########################
   
   # Automatic break points
-  output$automatic_peak_detection<-renderUI({
-    req(rv$trimmed_data)
-    tagList(
-      numericInput("peak_threshold", "Read threshold (%)", min = 0, max = 100, value = 3),
-      numericInput("padding", "Padding (# of bases)", min = 0, step = 1, value = 5),
-      numericInput("very_close_bp", "Merge close splice sites (# of bases)", min = 0, step = 1, value = 3),
-      actionButton("peak_detection_apply", "Apply")
-    )
-  })
-  
+
   observeEvent(ignoreInit=T, c(
     rv$trimmed_data,
     input$peak_detection_apply
@@ -879,12 +895,12 @@ server <- function(input, output) {
       validate(need(input$very_close_bp < input$padding, "Very close break points should be smaller than the padding"))
       
       withProgress(message = 'Automatic break point calculation', value = 1, {
-      rv$break_points = break_point_calculation(raw_exons=rv$trimmed_data,
-                                                num_reads_post_trimming=rv$num_reads_post_trimming,
-                                                breakpoint_freq_threshold=input$peak_threshold,
-                                                very_close_bp=input$very_close_bp,
-                                                breakpoint_padding=input$padding)
-      rv$break_points_original = rv$break_points
+        rv$break_points = break_point_calculation(raw_exons=rv$trimmed_data,
+                                                  num_reads_post_trimming=rv$num_reads_post_trimming,
+                                                  breakpoint_freq_threshold=input$peak_threshold,
+                                                  very_close_bp=input$very_close_bp,
+                                                  breakpoint_padding=input$padding)
+        rv$break_points_original = rv$break_points
       })
       print("Automatic break point calculation")
 
@@ -893,24 +909,9 @@ server <- function(input, output) {
 
   
   
-  
-  # Break point edition
-  output$start_bp_add_wait<-renderUI({
-    req(input$inputfile)
-    actionButton("start_bp_add", "Add row")
-  })
-  
-  output$end_bp_add_wait<-renderUI({
-    req(input$inputfile)
-    actionButton("end_bp_add", "Add row")
-  })
-  
-  output$break_point_apply_wait<-renderUI({
-    req(input$inputfile)
-    actionButton("break_point_apply", "Apply changes")
-  })
-  
-
+  #######################
+  # Break point edition #
+  #######################
   
   # Cut break points
   proxy_start <- dataTableProxy('start_dto')
@@ -1006,8 +1007,9 @@ server <- function(input, output) {
   
   
 
-
-  # Known break points
+  ######################
+  # Known break points #
+  ######################
   output$known_sites_wait<-renderUI({
     req(input$inputfile)
     fileInput("known_sites", "Known break points")
@@ -1030,6 +1032,9 @@ server <- function(input, output) {
   })
 
 
+  
+  
+  
   
   #########################
   # Break point asignment #
@@ -1090,9 +1095,9 @@ server <- function(input, output) {
       
       # df to plot
       print("df2plot")
-      rv$isoform_df_plot <- isoform_df_plot(rv$isoforms[[1]])
+      rv$isoform_df_plot <- isoform_df_plot_fun(rv$isoforms[[1]])
       incProgress(1/5)
-      rv$df_superplot <- break_point_freq(rv$trimmed_data)
+      rv$df_superplot <- break_point_freq_fun(rv$trimmed_data)
       incProgress(1/5)
       
       print( "df2plot finish")
@@ -1122,22 +1127,12 @@ server <- function(input, output) {
   ################
   # Plot funtion #
   ################
-  
-  output$plot_visual_variables<-renderUI({
-    req(rv$isoform_df_plot, rv$df_superplot)
-    tagList(
-      numericInput("abundance", "Isoform abundance threshold to display (%)", min = 0, max = 100, value = 1),
-      sliderInput("iso_pixels", "Isoform separation (px)", min = 10, max = 40, value = 20, step = 1, round = TRUE),
-      sliderInput("histo_pixels", "Barplot height (px)", min = 100, max = 500, value = 250, step = 10, round = TRUE),
-      actionButton("abundance_apply", "Apply")
-    )
-  })
-  
-  
+
   observeEvent(ignoreInit=T, c(
     rv$isoform_df_plot,
     rv$df_superplot,
-    input$abundance_apply
+    input$abundance_apply,
+    rv$transcripts_df_to_plot
     
   ), {
     print("plot")
@@ -1148,18 +1143,71 @@ server <- function(input, output) {
     if (is.null(input$histo_pixels)) histo_pixels = 250 else histo_pixels = input$histo_pixels
     
     withProgress(message = 'Plotting', value = 1, {
+      
+      # Abundance filter
+      rv$isoform_df_plot_filtered = rv$isoform_df_plot[rv$isoform_df_plot$perc >= abundance, c("x_pos_start", "x_pos_end", "y_pos", "star_stop", "grupo")]
+      
+      
+      # Color palete syncronization
+      isoform_df_plot_and_gtf = rbind(rv$isoform_df_plot_filtered, rv$transcripts_df_to_plot)
+      ordered_start_stop = unique(isoform_df_plot_and_gtf[order(isoform_df_plot_and_gtf$x_pos_start, isoform_df_plot_and_gtf$x_pos_end),"star_stop"])
+      isoform_df_plot_and_gtf$star_stop = factor(isoform_df_plot_and_gtf$star_stop, levels = ordered_start_stop)
+      
+      library(RColorBrewer)
+      qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+      col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+      
+      pal <- col_vector[1:length(unique(isoform_df_plot_and_gtf$star_stop))]
+      pal <- setNames(pal, unique(isoform_df_plot_and_gtf$star_stop))
+      
+      legend_exons_df = data.frame(x_pos_start = rv$isoform_df_plot_filtered$x_pos_start[1],
+                                   x_pos_end = rv$isoform_df_plot_filtered$x_pos_start[1],
+                                   y_pos = rv$isoform_df_plot_filtered$y_pos[1],
+                                   star_stop = as.character(isoform_df_plot_and_gtf$star_stop),
+                                   grupo = "legend_colors",
+                                   stringsAsFactors = F) 
+      rv$isoform_df_plot_filtered = rbind(rv$isoform_df_plot_filtered, legend_exons_df)
+      
+      
+      # Plot
       print("isoform_plot")
-      rv$isoform_plot <- isoform_plot(rv$isoform_df_plot, 
-                                      abundance)
+      rv$isoform_plot1 <- isoform_plot_fun(rv$isoform_df_plot_filtered, 
+                                           "VisoQLR detected isoforms\nIsoform ID | % of reads| size", 
+                                           pal, 
+                                           ordered_start_stop, 
+                                           showlegend = TRUE)
+      rv$num_iso1 <- max(length(unique(rv$isoform_df_plot_filtered[,"y_pos"])), 11)
+      
+      
       
       print("break_point_freq_plot")
-      rv$break_point_freq_plot <- break_point_freq_plot(rv$df_superplot, 
-                                                        rv$break_points, 
-                                                        input$start_dto_rows_selected, 
-                                                        input$end_dto_rows_selected)
+      rv$break_point_freq_plot <- break_point_freq_plot_fun(rv$df_superplot, 
+                                                            rv$break_points, 
+                                                            input$start_dto_rows_selected, 
+                                                            input$end_dto_rows_selected)
   
-      rv$num_iso <- max(length(unique(rv$isoform_df_plot[rv$isoform_df_plot$perc >= abundance,"y_pos"])), 11)
-      rv$multiplot <- multiplot_fun(rv$isoform_plot, rv$break_point_freq_plot, rv$num_iso, iso_pixels, histo_pixels)
+      
+      if (is.null(rv$transcripts_df_to_plot)){
+        
+        rv$multiplot <- multiplot_fun1(rv$isoform_plot1, rv$break_point_freq_plot, rv$num_iso1, iso_pixels, histo_pixels)
+        plotheight=rv$num_iso1*iso_pixels+histo_pixels
+        rv$multiplot$height = plotheight
+      
+      }else{
+        
+        rv$isoform_plot2 = isoform_plot_fun(rv$transcripts_df_to_plot, 
+                                            gsub(" \\| $", "", paste("Loaded transcripts\nTranscript ID", paste(input$transcriptinfo2display,  sep = "", collapse = " | "), sep = " | ")),
+                                            pal,
+                                            ordered_start_stop,
+                                            showlegend = FALSE)
+        rv$num_iso2 <- max(length(unique(rv$transcripts_df_to_plot[,"y_pos"])), 11)
+        rv$multiplot <- multiplot_fun2(rv$isoform_plot1, rv$isoform_plot2, rv$break_point_freq_plot, rv$num_iso1, rv$num_iso2, iso_pixels, histo_pixels)
+        plotheight=rv$num_iso1*iso_pixels+histo_pixels+rv$num_iso2*iso_pixels
+        rv$multiplot$height = plotheight
+
+      }
+      
+ 
   
       print("plot1")
       output$plot1 <- renderPlotly(rv$multiplot)
@@ -1167,7 +1215,7 @@ server <- function(input, output) {
       
       print("ui_plot")
       output$ui_plot <- renderUI({
-        plotlyOutput("plot1", height = rv$num_iso*iso_pixels+histo_pixels)
+        plotlyOutput("plot1", height = plotheight)
         })
       # cat(file=stderr(), "plot finish\n")
       print("plot finish")
@@ -1180,23 +1228,98 @@ server <- function(input, output) {
   
   
   
+  ###########################
+  # Transcript data loading #
+  ###########################
+  output$transcripts_data_wait<-renderUI({
+    req(input$inputfile)
+    tagList(
+      wellPanel(
+        h4("Load transcripts fom file"),
+        radioButtons("transcriptinputtype", "Input format", c("GTF", "GFF3"), selected="GTF"),
+        fileInput("transcriptinputfile", "Transcript Input file"),
+        uiOutput("transcripts_data_wait2")
+      )
+    )
+  })
+  
+  output$transcripts_data_wait2<-renderUI({
+    req(input$transcriptinputfile)
+    tagList(
+      checkboxGroupInput("transcriptinfo2display", "Information to display", rv$transcriptcolumns, selected="size"),
+      actionButton("transcriptinfo2display_apply", "Apply")
+    )
+  })
+
+
+  # Data loading
+  observeEvent(ignoreInit=T, c(
+    input$transcriptinputtype,
+    input$transcriptinputfile
+  ), {
+    file <- input$transcriptinputfile
+    ext <- tools::file_ext(file$datapath)
+
+    print("Loading input transcrits (prerequisite)")
+    req(file)
+
+    withProgress(message = 'Loading transcripts', value = 1, {
+      if (input$transcriptinputtype == "GFF3"){
+        validate(need(ext %in% c("gff3", "gff"), "Please upload a GFF3 file with the extension .gff or .gff3"))
+        rv$transcriptinput <- transcript_data_loading(file$datapath, input$transcriptinputtype)
+      } else {
+        validate(need(ext %in% c("gtf"), "Please upload a GTF file with the extension .gtf"))
+        rv$transcriptinput <- transcript_data_loading(file$datapath, input$transcriptinputtype)
+      }
+
+    })
+
+    rv$transcriptcolumns = colnames(rv$transcriptinput[,6:ncol(rv$transcriptinput)])
+
+    print("Loading data")
+  })
+
+
+  # Gene selection
+  observeEvent(ignoreInit=T, c(
+    input$selectgene,
+    input$transcriptinfo2display_apply,
+    rv$transcriptinput
+  ),{
+    req(rv$transcriptinput)
+    req(input$selectgene)
+
+    withProgress(message = 'Selecting gene', value = 1, {
+      rv$gene_filter_transcripts = rv$transcriptinput[rv$transcriptinput$gene == input$selectgene, ]
+
+      rv$transcripts_df_to_plot = data.frame(
+        x_pos_start = rv$gene_filter_transcripts$start,
+        x_pos_end = rv$gene_filter_transcripts$end,
+        y_pos = apply( rv$gene_filter_transcripts[ , c("id", input$transcriptinfo2display) , drop = F] , 1 , paste , collapse = " | " ),
+        star_stop = paste(rv$gene_filter_transcripts$start, rv$gene_filter_transcripts$end, sep = "-"),
+        grupo = "Loaded transcripts",
+        stringsAsFactors = F)
+      rv$transcripts_df_to_plot$y_pos = factor(rv$transcripts_df_to_plot$y_pos, levels = sort(unique(rv$transcripts_df_to_plot$y_pos), decreasing = T))
+      
+
+    })
+    print("Gene selection")
+  })
+
+
+
+
+  
+  
+  
+  
+  
+  
+  
 
   ################
   # Write output #
   ################
-  
-  output$download_params<-renderUI({
-    req(input$inputfile)
-    tagList(
-      shinyDirButton('output', 'Download directory', 'Please select a folder', FALSE),
-      textOutput("output_dir"),
-      textInput(inputId='prefix_output', label='Output prefix', 
-                value = gsub("(.gff3|.gff|.bed|.bed6|.bed12)$", "", input$inputfile$name, perl = T)),
-      actionButton("save_apply", "Save")
-    )
-  })
-  
-  
   
   observe({
     shinyDirChoose(input, 'output', roots = c('root' = '/'))
@@ -1225,24 +1348,35 @@ server <- function(input, output) {
       if (is.null(input$histo_pixels)) histo_pixels = 250 else histo_pixels = input$histo_pixels
       if (is.null(input$iso_pixels)) iso_pixels = 20 else iso_pixels = input$iso_pixels
       
+      
       # Combined plot (selected isoforms)
-      rv$multiplot$height = rv$num_iso*iso_pixels+histo_pixels
       saveWidget(rv$multiplot, paste0(dir_plus_prefix, ".combined_plot.html"), selfcontained = T)
       incProgress(1/8)
       save_image(rv$multiplot, paste0(dir_plus_prefix, ".combined_plot.pdf"),format = "pdf", height = rv$multiplot$height)
       incProgress(1/8)
       print("Saving Combined plot (selected isoforms)")
       
+
+      
       # Combined plot (all isoforms)
-      all_isoform_plot <- isoform_plot(rv$isoform_df_plot, 0)
-      num_all_iso <- max(length(unique(rv$isoform_df_plot[rv$isoform_df_plot$perc >= 0,"y_pos"])), 11)
-      multiplot_all_iso <- multiplot_fun(all_isoform_plot, rv$break_point_freq_plot, num_all_iso, iso_pixels, histo_pixels)
-      multiplot_all_iso$height = num_all_iso*iso_pixels+histo_pixels
-      saveWidget(multiplot_all_iso, paste0(dir_plus_prefix, ".combined_plot_all_isoforms.html"), selfcontained = T)
+      ordered_start_stop_all_iso = unique(rv$isoform_df_plot[order(rv$isoform_df_plot$x_pos_start, rv$isoform_df_plot$x_pos_end),"star_stop"])
+      
+      rv$isoform_plot_all_iso <- isoform_plot_fun(df_pos = rv$isoform_df_plot, 
+                                                  ylabel = "VisoQLR detected isoforms\nIsoform ID | % of reads| size", 
+                                                  pal = NULL, 
+                                                  start_end_levels = ordered_start_stop_all_iso, 
+                                                  showlegend = TRUE)
+      num_all_iso <- max(length(unique(rv$isoform_df_plot[,"y_pos"])), 11)
+      rv$isoform_plot_all_iso$height = num_all_iso*iso_pixels
+      saveWidget(rv$isoform_plot_all_iso, paste0(dir_plus_prefix, ".all_isoforms_plot.html"), selfcontained = T)
       incProgress(1/8)
-      save_image(multiplot_all_iso, paste0(dir_plus_prefix, ".combined_plot_all_isoforms.pdf"),format = "pdf", height = multiplot_all_iso$height)
+      save_image(rv$isoform_plot_all_iso, paste0(dir_plus_prefix, ".all_isoforms_plot.pdf"),format = "pdf", height = rv$isoform_plot_all_iso$height)
       incProgress(1/8)
       print("Saving Combined plot (all isoforms)")
+
+      
+      
+      
       
       # Break point information
       write.table(rv$bp_to_show[[3]], paste0(dir_plus_prefix, ".breakpoints_info.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
