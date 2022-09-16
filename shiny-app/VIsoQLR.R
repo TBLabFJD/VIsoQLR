@@ -1,5 +1,5 @@
 library(shiny)
-library(ggplot2)
+# library(ggplot2)
 library(vctrs)
 library(plotly)
 library(DT)
@@ -75,6 +75,7 @@ transcript_data_loading <- function(input_path,  inputformat = "GTF"){
   gtf_lengths = unlist(lapply(gtf_split, function(x) sum(x$end - x$start)))
   gtf$size = paste0(gtf_lengths[gtf$id], "bp")
   
+  gtf = type.convert(gtf, as.is = T)
   return(gtf)
 }
 
@@ -175,30 +176,20 @@ break_point_calculation  <- function(raw_exons, num_reads_post_trimming, breakpo
 ############################
 # Known break points merge #
 ############################
-known_sites_merge <- function(known_sites_file, break_points_list, gene, raw_exons){
-  start_position = break_points_list[[1]]
-  end_position = break_points_list[[2]]
-  
+known_sites_merge <- function(known_sites_file, gene, raw_exons){
+
   known_sites = read.delim(known_sites_file, header = F, stringsAsFactors = F, comment.char = "#")[,1:5]
-  colnames(known_sites) = c("tipo", "gene", "site", "lower", "upper")
+  colnames(known_sites) = c("tipo", "gene", "breakp", "left", "right")
   known_sites = known_sites[known_sites$gene == gene,]
   known_sites$tipo = tolower(known_sites$tipo)
   
+  start_position = list()
+  end_position = list()
   for (i in 1:nrow(known_sites)){
     if (known_sites[i, "tipo"] == "start"){
-      start_position = start_position[!(start_position$breakp >= known_sites[i, "lower"] & start_position$breakp <= known_sites[i, "upper"]), ]
-      start_position[start_position$breakp < known_sites[i, "lower"] & start_position$right >= known_sites[i, "lower"], "right"] = known_sites[i, "lower"] - 1
-      start_position[start_position$breakp > known_sites[i, "lower"] & start_position$left <= known_sites[i, "upper"], "left"] = known_sites[i, "upper"] + 1
-      start_position = rbind(start_position, c(known_sites[i, "site"],
-                                               known_sites[i, "lower"],
-                                               known_sites[i, "upper"]))
+      start_position = append(start_position, known_sites[i, c("breakp", "left", "right")])
     } else if (known_sites[i, "tipo"] %in% c("end", "stop")) {
-      end_position = end_position[!(end_position$breakp >= known_sites[i, "lower"] & end_position$breakp <= known_sites[i, "upper"]), ]
-      end_position[end_position$breakp < known_sites[i, "lower"] & end_position$right >= known_sites[i, "lower"], "right"] = known_sites[i, "lower"] - 1
-      end_position[end_position$breakp > known_sites[i, "lower"] & end_position$left <= known_sites[i, "upper"], "left"] = known_sites[i, "upper"] + 1
-      end_position = rbind(end_position, c(known_sites[i, "site"],
-                                           known_sites[i, "lower"],
-                                           known_sites[i, "upper"]))
+      end_position = append(end_position, known_sites[i, c("breakp", "left", "right")])
     }
   }
 
@@ -309,7 +300,7 @@ exon_definition <- function(bp_asigned_exons){
 exon_info_fun <- function(defined_exons){
   exon_info_df = as.data.frame(table(defined_exons$coordinates))
   colnames(exon_info_df) = c("exon", "number_of_reads")
-  exon_info_df$percent_of_reads = round(exon_info_df$number_of_reads / length(unique(defined_exons$id)) * 100, 2)
+  exon_info_df$percent_of_reads = round(exon_info_df$number_of_reads / length(unique(defined_exons$id)) * 100, 1)
   exon_info_df = exon_info_df[order(exon_info_df$exon),]
   
   exon_info_df$Size = unlist(lapply(gsub("_", "+", exon_info_df[,"exon"]), function(x) -eval(parse(text = x))))
@@ -344,20 +335,58 @@ isoform_definition <- function(defined_exons){
 }
 
 
+# Isoform full-length filter
+isoform_full_length_filter = function(isoforms, break_points){
+  isoform_info = isoforms[[1]]
+  isoform_read = isoforms[[2]]
+  start = min(break_points[[1]][,1])
+  end = max(break_points[[2]][,1])
+  
+  positions_split = strsplit(isoform_info$read_isoform, split = "-|_", perl = T)
+  keep = c()
+  discard = c()
+  
+  for (i in 1:nrow(isoform_info)){
+    if (start %in% positions_split[[i]] & end %in% positions_split[[i]]) {
+      keep = c(keep, i)
+    } else { 
+      discard = c(discard, i)
+    }
+  }
+  
+  keep_isoform_info = isoform_info[keep,]
+  keep_isoform_info$perc = round(keep_isoform_info$Freq/sum(keep_isoform_info$Freq)*100, digits = 2)
+  keep_isoform_read = isoform_read[isoform_read %in% keep_isoform_info$read_isoform]
+  partial_reads = isoform_read[isoform_read %in% isoform_info[discard,"read_isoform"]]
+  return(list(keep_isoform_info, keep_isoform_read, partial_reads))
+}
+
 
 
 # Isoform information
-isoform_info_fun <- function(isoform_frequencies, n_inicial, n_post_trim, n_final){
+isoform_info_fun <- function(isoform_frequencies, n_inicial, n_post_trim, n_final, n_not_full_lenght = NULL){
   
-  n_vector_reads = n_inicial - n_post_trim
-  n_no_consensous_breakpoint_reads = n_post_trim - n_final
-  
-  other_groups_df = data.frame(isoform_id = c("Only vector reads", "No consensous breakpoint reads"),
-                               read_isoform = c("-", "-"), 
-                               Freq = c(n_vector_reads, n_no_consensous_breakpoint_reads),
-                               perc = c("-", "-"), 
-                               Size = c(0, 0),
-                               stringsAsFactors = FALSE)
+  if (is.null(n_not_full_lenght)){
+    n_vector_reads = n_inicial - n_post_trim
+    n_no_consensous_breakpoint_reads = n_post_trim - n_final
+    
+    other_groups_df = data.frame(isoform_id = c("Only vector reads", "No consensous breakpoint reads"),
+                                 read_isoform = c("-", "-"), 
+                                 Freq = c(n_vector_reads, n_no_consensous_breakpoint_reads),
+                                 perc = c("-", "-"), 
+                                 Size = c(0, 0),
+                                 stringsAsFactors = FALSE)
+  } else {
+    n_vector_reads = n_inicial - n_post_trim
+    n_no_consensous_breakpoint_reads = n_post_trim - n_final - n_not_full_lenght
+    
+    other_groups_df = data.frame(isoform_id = c("Only vector reads", "No consensous breakpoint reads", "Partial length reads"),
+                                 read_isoform = c("-", "-", "-"), 
+                                 Freq = c(n_vector_reads, n_no_consensous_breakpoint_reads, n_not_full_lenght),
+                                 perc = c("-", "-", "-"), 
+                                 Size = c(0, 0, 0),
+                                 stringsAsFactors = FALSE)
+  } 
   
   isoform_id = paste("Iso", 1:nrow(isoform_frequencies), sep = "")
   isoform_frequencies = cbind(isoform_id, isoform_frequencies)
@@ -373,11 +402,15 @@ isoform_info_fun <- function(isoform_frequencies, n_inicial, n_post_trim, n_fina
 
 
 
+
+
+
 # Read classification
-read_clasification_fun <- function(all_ids, no_consensus_ids, classified_ids){
+read_clasification_fun <- function(all_ids, no_consensus_ids, classified_ids, not_full_length = NULL){
   classified_df <- data.frame(read_id = names(classified_ids), type = as.character(classified_ids))
   
-  only_vector_ids = setdiff(unique(all_ids), c(unique(no_consensus_ids), names(classified_ids)))
+  
+  only_vector_ids = setdiff(unique(all_ids), c(unique(no_consensus_ids), names(classified_ids), names(not_full_length)))
   if (length(only_vector_ids) != 0){
     trimmed_df <- data.frame(read_id = only_vector_ids, type = "Only_vector_reads")
     classified_df = rbind(classified_df, trimmed_df)
@@ -386,6 +419,11 @@ read_clasification_fun <- function(all_ids, no_consensus_ids, classified_ids){
   if (length(unique(no_consensus_ids)) != 0){
     no_consensus_df <- data.frame(read_id = unique(no_consensus_ids), type = "No_consensous_breakpoint_reads")
     classified_df = rbind(classified_df, no_consensus_df)
+  }
+  
+  if (length(unique(not_full_length)) != 0){
+    not_full_length_df <- data.frame(read_id = names(not_full_length), type = "Partial_length_reads")
+    classified_df = rbind(classified_df, not_full_length_df)
   }
   
   return(classified_df)
@@ -701,10 +739,8 @@ ui <- fluidPage(
       wellPanel(
         h3("Input"),
         radioButtons("inputtype", "Input format", c("GFF3", "BED6"), selected="GFF3"),
-        fileInput("inputfile", "Input file"),
-        uiOutput("known_sites_wait"),
-        uiOutput("transcripts_data_wait")
-        # fileInput("reference", "Reference sequence"),
+        fileInput("inputfile", "Input file")
+        # fileInput("reference", "Reference sequence")
       ),
       uiOutput("input_wait_sidebarpanel"),
     ),
@@ -733,28 +769,30 @@ server <- function(input, output) {
   output$input_wait_sidebarpanel<-renderUI({
     req(input$inputfile)
     tagList(
-      wellPanel(
-        h3("Download"), 
-        shinyDirButton('output', 'Download directory', 'Please select a folder', FALSE),
-        textOutput("output_dir"),
-        textInput(inputId='prefix_output', label='Output prefix', 
-                  value = gsub("(.gff3|.gff|.bed|.bed6|.bed12)$", "", input$inputfile$name, perl = T)),
-        actionButton("save_apply", "Save")
-      ),
       
       wellPanel(
-        h3("Analysis window"),
+        h3("Analysis bounding"),
         selectInput(inputId='selectgene', label='Select gene', choices = unique(rv$orig$gene)),
         uiOutput("studied_range")
       ),
       
-      
       wellPanel(
-        h3("Automatic peak detection"),
-        numericInput("peak_threshold", "Read threshold (%)", min = 0, max = 100, value = 3),
-        numericInput("padding", "Padding (# of bases)", min = 0, step = 1, value = 5),
-        numericInput("very_close_bp", "Merge close splice sites (# of bases)", min = 0, step = 1, value = 3),
-        actionButton("peak_detection_apply", "Apply")
+        h3("Exon coordinates"),
+        wellPanel(
+          h4("Automatic detection"),
+          numericInput("peak_threshold", "Read threshold (%)", min = 0, max = 100, value = 3),
+          numericInput("padding", "Padding (# of bases)", min = 0, step = 1, value = 5),
+          numericInput("very_close_bp", "Merge close splice sites (# of bases)", min = 0, step = 1, value = 3),
+          actionButton("peak_detection_apply", "Apply")
+        ),
+        wellPanel(
+          h4("Custom coordinates"),
+          fileInput("known_sites", "File with exon coordinates")
+        ),
+        wellPanel(
+          h4("Full reads"),
+          checkboxInput("full_reads", "Keep full length transcripts")
+        ),
       ),
       
       wellPanel(
@@ -764,9 +802,27 @@ server <- function(input, output) {
         sliderInput("histo_pixels", "Barplot height (px)", min = 100, max = 500, value = 250, step = 10, round = TRUE),
         actionButton("abundance_apply", "Apply")
       ),
+      
+      wellPanel(
+        h3("Defined isoforms for comparison"),
+        radioButtons("transcriptinputtype", "Input format", c("GTF", "GFF3"), selected="GTF"),
+        fileInput("transcriptinputfile", "Input file"),
+        uiOutput("transcripts_data_wait")
+      ),
+      
+      
+      wellPanel(
+        h3("Download"), 
+        shinyDirButton('output', 'Download directory', 'Please select a folder', FALSE),
+        textOutput("output_dir"),
+        textInput(inputId='prefix_output', label='Output prefix', 
+                  value = gsub("(.gff3|.gff|.bed|.bed6|.bed12)$", "", input$inputfile$name, perl = T)),
+        actionButton("save_apply", "Save")
+      ),
+      
     )
   })
-  
+ 
   
   output$input_wait_mainpanel<-renderUI({
     req(input$inputfile)
@@ -1010,10 +1066,7 @@ server <- function(input, output) {
   ######################
   # Known break points #
   ######################
-  output$known_sites_wait<-renderUI({
-    req(input$inputfile)
-    fileInput("known_sites", "Known break points")
-  })
+
   
   observeEvent(ignoreInit=T, c(
     input$known_sites
@@ -1027,7 +1080,7 @@ server <- function(input, output) {
       print("Known break points ater req")
       
       withProgress(message = 'Loading known break points', value = 1, {
-        rv$break_points <- known_sites_merge(file$datapath, rv$break_points, input$selectgene)
+        rv$break_points <- known_sites_merge(file$datapath, input$selectgene)
       })
   })
 
@@ -1069,7 +1122,7 @@ server <- function(input, output) {
     input$break_point_apply
   ), {
     print("break point assignment before req(rv$break_points)")
-    req(rv$break_points)
+    req(rv$bp_asigned_exons)
 
     
     withProgress(message = 'Exon and isoform definition', {
@@ -1078,24 +1131,47 @@ server <- function(input, output) {
       # rv$bp_asigned_exons <- break_point_asignment(rv$trimmed_data, rv$break_points)
       # rv$bp_to_show = break_point_info_calculator(rv$break_points, rv$num_reads_post_trimming, rv$bp_asigned_exons)
         
-      incProgress(1/5)
+      incProgress(1/3)
       
       # Exon definition
       print("exon definition")
       rv$defined_exons <- exon_definition(rv$bp_asigned_exons)
       rv$exon_information = exon_info_fun(rv$defined_exons[[1]])
       rv$num_reads_final = length(unique(rv$defined_exons[[1]]$id))
-      incProgress(1/5)
+      incProgress(1/3)
       
       # Isoform definition
       print("isoform definition")
       rv$isoforms <- isoform_definition(rv$defined_exons[[1]]) # Slow
-      rv$isoforms_information <- isoform_info_fun(rv$isoforms[[1]], rv$num_reads_initial, rv$num_reads_post_trimming, rv$num_reads_final)
-      incProgress(1/5)
+      incProgress(1/3)
+      
+    })
+  })
+ 
+  
+  
+  observeEvent(ignoreInit=T, c(
+    rv$isoforms,
+    input$full_reads
+  ), { 
+    
+    req(rv$isoforms)
+    
+    withProgress(message = 'Exon and isoform definition', {
+      
+      # Full length filter and isoform information
+      if (input$full_reads){
+        rv$isoforms_filtered = isoform_full_length_filter(rv$isoforms, rv$break_points)
+        rv$isoforms_information <- isoform_info_fun(rv$isoforms_filtered[[1]], rv$num_reads_initial, rv$num_reads_post_trimming, rv$num_reads_final, length(rv$isoforms_filtered[[3]]))
+      }else{
+        rv$isoforms_filtered = rv$isoforms
+        rv$isoforms_information <- isoform_info_fun(rv$isoforms_filtered[[1]], rv$num_reads_initial, rv$num_reads_post_trimming, rv$num_reads_final)
+      }
+      incProgress(1/3)
       
       # df to plot
       print("df2plot")
-      rv$isoform_df_plot <- isoform_df_plot_fun(rv$isoforms[[1]])
+      rv$isoform_df_plot <- isoform_df_plot_fun(rv$isoforms_filtered[[1]])
       incProgress(1/5)
       rv$df_superplot <- break_point_freq_fun(rv$trimmed_data)
       incProgress(1/5)
@@ -1231,21 +1307,13 @@ server <- function(input, output) {
   ###########################
   # Transcript data loading #
   ###########################
+
   output$transcripts_data_wait<-renderUI({
-    req(input$inputfile)
-    tagList(
-      wellPanel(
-        h4("Load transcripts fom file"),
-        radioButtons("transcriptinputtype", "Input format", c("GTF", "GFF3"), selected="GTF"),
-        fileInput("transcriptinputfile", "Transcript Input file"),
-        uiOutput("transcripts_data_wait2")
-      )
-    )
-  })
-  
-  output$transcripts_data_wait2<-renderUI({
     req(input$transcriptinputfile)
     tagList(
+      numericInput("num_transcript2display", "Maximum number of transcripts to display", min = 1, max = 100, value = 10),
+      selectInput(inputId='transcriptorder2display', label='Sort transcripts by', choices = c("id", rv$transcriptcolumns), selected = "id"),
+      selectInput(inputId='decreasingorder2display', label='Sort increasing/decrasing', choices = c("Increasing", "Decreasing"), selected = "Increasing"),
       checkboxGroupInput("transcriptinfo2display", "Information to display", rv$transcriptcolumns, selected="size"),
       actionButton("transcriptinfo2display_apply", "Apply")
     )
@@ -1274,7 +1342,6 @@ server <- function(input, output) {
 
     })
 
-    rv$transcriptcolumns = colnames(rv$transcriptinput[,6:ncol(rv$transcriptinput)])
 
     print("Loading data")
   })
@@ -1283,27 +1350,71 @@ server <- function(input, output) {
   # Gene selection
   observeEvent(ignoreInit=T, c(
     input$selectgene,
+    rv$transcriptinput
+  ),{
+    print("Gene selection transcripts (prerequisites)")
+    req(rv$transcriptinput)
+    req(input$selectgene)
+    print("Gene selection transcripts")
+    
+    withProgress(message = 'Selecting gene', value = 1, {
+      
+      rv$transcriptcolumns = colnames(rv$transcriptinput[,6:ncol(rv$transcriptinput)])
+      rv$gene_filter_transcripts = rv$transcriptinput[rv$transcriptinput$gene == input$selectgene, ]
+      
+      # Frequency calculation, numeric annotations
+      rv$gene_filter_transcripts_unique = rv$gene_filter_transcripts[!duplicated(rv$gene_filter_transcripts$id), ]
+      new_col = c()
+      for (i in rv$transcriptcolumns){
+        if (is.numeric(rv$gene_filter_transcripts[,i])){
+          rv$gene_filter_transcripts_unique[,paste0(i, " (%)")] = paste0(round(rv$gene_filter_transcripts_unique[,i]/sum(rv$gene_filter_transcripts_unique[,i])*100, 2), "%")
+          new_col = c(new_col, paste0(i, " (%)"))
+        }
+      }
+      rv$gene_filter_transcripts_unique = rv$gene_filter_transcripts_unique[,c("id", new_col)]
+      rv$gene_filter_transcripts = merge(rv$gene_filter_transcripts, rv$gene_filter_transcripts_unique, by = "id")
+      rv$transcriptcolumns = c(rv$transcriptcolumns, new_col)
+    })
+    print("Gene selection")
+  })
+  
+  
+  
+  observeEvent(ignoreInit=T, c(
+    rv$transcriptcolumns,
     input$transcriptinfo2display_apply,
     rv$transcriptinput
   ),{
-    req(rv$transcriptinput)
-    req(input$selectgene)
-
-    withProgress(message = 'Selecting gene', value = 1, {
-      rv$gene_filter_transcripts = rv$transcriptinput[rv$transcriptinput$gene == input$selectgene, ]
+    print("Transcript data to plot (prerequisites)")
+    req(rv$gene_filter_transcripts)
+    req(input$num_transcript2display)
+    req(input$transcriptorder2display)
+    req(input$decreasingorder2display)
+    req(input$transcriptinfo2display)
+    print("Transcript data to plot")
+    
+    withProgress(message = 'Data preparation to plot', value = 1, {
+      
+      rv$gene_filter_transcripts$y_pos = apply( rv$gene_filter_transcripts[ , c("id", input$transcriptinfo2display) , drop = F] , 1 , paste , collapse = " | " )
 
       rv$transcripts_df_to_plot = data.frame(
         x_pos_start = rv$gene_filter_transcripts$start,
         x_pos_end = rv$gene_filter_transcripts$end,
-        y_pos = apply( rv$gene_filter_transcripts[ , c("id", input$transcriptinfo2display) , drop = F] , 1 , paste , collapse = " | " ),
+        y_pos = rv$gene_filter_transcripts$y_pos,
         star_stop = paste(rv$gene_filter_transcripts$start, rv$gene_filter_transcripts$end, sep = "-"),
         grupo = "Loaded transcripts",
         stringsAsFactors = F)
-      rv$transcripts_df_to_plot$y_pos = factor(rv$transcripts_df_to_plot$y_pos, levels = sort(unique(rv$transcripts_df_to_plot$y_pos), decreasing = T))
-      
 
+            
+      if (input$decreasingorder2display == "Decreasing") decreasing = TRUE else decreasing = FALSE
+      factorlevels = unique(rv$gene_filter_transcripts[order(rv$gene_filter_transcripts[,input$transcriptorder2display], decreasing = decreasing), "y_pos"])
+      factorlevels = factorlevels[1:min(length(factorlevels),input$num_transcript2display)]
+      factorlevels = rev(factorlevels)
+      rv$transcripts_df_to_plot = rv$transcripts_df_to_plot[rv$transcripts_df_to_plot$y_pos %in% factorlevels,]
+      rv$transcripts_df_to_plot$y_pos = factor(rv$transcripts_df_to_plot$y_pos, levels = factorlevels)
+      
     })
-    print("Gene selection")
+    print("Transcript data to plot (end)")
   })
 
 
@@ -1394,7 +1505,7 @@ server <- function(input, output) {
       
       
       # Read clasification
-      read_clasification = read_clasification_fun(all_ids = rv$data$id , no_consensus_ids = rv$defined_exons[[2]], classified_ids = rv$isoforms[[2]])
+      read_clasification = read_clasification_fun(all_ids = rv$data$id , no_consensus_ids = rv$defined_exons[[2]], classified_ids = rv$isoforms_filtered[[2]], not_full_length = rv$isoforms_filtered[[3]])
       write.table(read_clasification, paste0(dir_plus_prefix, ".read_clasification.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
       incProgress(1/8)
     })
