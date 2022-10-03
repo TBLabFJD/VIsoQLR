@@ -35,10 +35,10 @@ To run VIsoQLR type on your shell (or Windows PowerShell in Windows once Docker 
 docker run -it -p 8888:8888 tblabfjd/visoqlr:latest
 ```
 This will promp some text on the shell and once the line `Listening on http://0.0.0.0:8888` appears go to the browser and type `http://0.0.0.0:8888` on Linux systems or `http://localhost:8888` on Windows systems. If succesful you will see:
-[![initialized_VIsoQLR](https://github.com/TBLabFJD/VIsoQLR/blob/master/images/initialized_VIsoQLR.png)](https://github.com/TBLabFJD/VIsoQLR)
+[![initialized_VIsoQLR](https://github.com/TBLabFJD/VIsoQLR/tree/main/images/initialized_VIsoQLR.png)](https://github.com/TBLabFJD/VIsoQLR)
 
 Click on 'Browse...' button to navigate to your file system to upload your aligner reads in `GFF3` or `BED6` file format. Once selected the program will automatically run with its default parameters to identify and quantify isoforms. and you will see something like this:
-[![default_analysis_VIsoQLR](https://github.com/TBLabFJD/VIsoQLR/blob/master/images/default_analysis_VIsoQLR.png)](https://github.com/TBLabFJD/VIsoQLR)
+[![default_analysis_VIsoQLR](https://github.com/TBLabFJD/VIsoQLR/tree/main/images/default_analysis_VIsoQLR.png)](https://github.com/TBLabFJD/VIsoQLR)
 
 
 To know more about VIsoQLR have a look at the manuscript in bioRxiv
