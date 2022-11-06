@@ -16,7 +16,7 @@ library(RColorBrewer)
 
 rm(list=ls()) 
 
-options(shiny.maxRequestSize=3000*1024^2)
+options(shiny.maxRequestSize=10000*1024^2)
 reticulate::py_run_string("import sys")
 
 
@@ -45,7 +45,7 @@ bed_data_loading <- function(input_path){
   colnames(bed6) = c("gene", "start", "end", "id", "score", "orientation")
   bed6$score = as.numeric(bed6$score)
   bed6$start = bed6$start + 1
-  bed6 = bed6[bed6$score == 60,]
+  # bed6 = bed6[bed6$score == 60,]
   return(bed6)
 }
 
@@ -57,12 +57,15 @@ transcript_data_loading <- function(input_path,  inputformat = "GTF"){
   gtf = read.delim(input_path, header = FALSE, comment.char = "#", stringsAsFactors = FALSE)
   
   transcripts = gtf[gtf$V3 == "transcript","V9"]
+  if (length(transcripts) == 0){transcripts = gtf[,"V9"]}
   transcriptinfo = gsub("; ", ";", transcripts)
   transcriptinfo = do.call("rbind", strsplit(x = transcriptinfo, split = ";"))
   cnames = do.call("rbind", strsplit(x = transcriptinfo[1,], split = separation))[,1]
   transcriptinfo = gsub("^.* ", "", transcriptinfo, perl = T)
   colnames(transcriptinfo) = cnames
-  
+  transcriptinfo = transcriptinfo[!duplicated(transcriptinfo[,"transcript_id"]),]
+    
+
   gtf = gtf[gtf$V3 == "exon", c("V1", "V4","V5","V9", "V6")]
   colnames(gtf) = c("gene", "start", "end", "id", "score")
   gtf$score = as.numeric(gtf$score)
@@ -809,7 +812,7 @@ ui <- fluidPage(
       
       wellPanel(
         h3("Input"),
-        radioButtons("inputtype", "Input format", c("GFF3", "BED6"), selected="GFF3"),
+        radioButtons("inputtype", "Input format", c("GFF3", "BED6", "BAM"), selected="GFF3"),
         fileInput("inputfile", "Input file")
         # fileInput("reference", "Reference sequence")
       ),
@@ -845,7 +848,7 @@ server <- function(input, output) {
         h3("Analysis bounding"),
         selectInput(inputId='selectgene', label='Select gene', choices = unique(rv$orig$gene)),
         uiOutput("studied_range"),
-        checkboxInput("full_reads", "Select only full length transcripts")
+        checkboxInput("full_reads", "Select only complete PCR sequences")
       ),
       
       wellPanel(
@@ -996,9 +999,13 @@ server <- function(input, output) {
       if (input$inputtype == "GFF3"){
         validate(need(ext %in% c("gff3", "gff"), "Please upload a GFF3 file"))
         rv$orig <- gff3_data_loading(file$datapath)
-      } else {
+      } else if(input$inputtype == "BED6"){
         validate(need(ext %in% c("bed", "bed6"), "Please upload a 6 column BED file"))
         rv$orig <- bed_data_loading(file$datapath)
+      } else if(input$inputtype == "BAM"){
+        validate(need(ext %in% c("bam"), "Please upload a BAM file"))
+        system(paste0("bamToBed -split -i ", file$datapath, " > ", gsub(".bam$", "", file$name, perl = T), ".bed"))
+        rv$orig <- bed_data_loading(paste0(gsub(".bam$", "", file$name, perl = T), ".bed"))
       }
     })
     print("Loading data")
@@ -1504,7 +1511,7 @@ server <- function(input, output) {
           new_col = c(new_col, paste0(i, " (%)"))
         }
       }
-      rv$gene_filter_transcripts_unique = rv$gene_filter_transcripts_unique[,c("id", new_col)]
+      rv$gene_filter_transcripts_unique = rv$gene_filter_transcripts_unique[,c("id", new_col), drop = F]
       rv$gene_filter_transcripts = merge(rv$gene_filter_transcripts, rv$gene_filter_transcripts_unique, by = "id")
       rv$transcriptcolumns = c(rv$transcriptcolumns, new_col)
     })
@@ -1590,7 +1597,7 @@ server <- function(input, output) {
   
   # Dynamic plot (html)
   output$download_plot_html <- downloadHandler(
-    filename = paste0(rv$prefix_output, ".combined_plot.html"),
+    filename = function(){paste0(rv$prefix_output, ".combined_plot.html")},
     content = function(file){saveWidget(widget = rv$multiplot, file = file, selfcontained = T)}
   )
   # Static plot (pdf)
@@ -1602,28 +1609,28 @@ server <- function(input, output) {
 
   # Break point information
   output$download_bp_info <- downloadHandler(
-    filename = paste0(rv$prefix_output, ".breakpoints_info.tsv"),
+    filename = function(){paste0(rv$prefix_output, ".breakpoints_info.tsv")},
     content = function(file){write.table(rv$bp_to_show[[3]], file, sep = "\t", quote = F, row.names = F, col.names = T)}
   )
   # Exon information
   output$download_exon_info <- downloadHandler(
-    filename = paste0(rv$prefix_output, ".exon_info.tsv"),
+    filename = function(){paste0(rv$prefix_output, ".exon_info.tsv")},
     content = function(file){write.table(rv$exon_information, file, sep = "\t", quote = F, row.names = F, col.names = T)}
   )
   # Isoform information (TSV)
   output$download_iso_information_tsv <- downloadHandler(
-    filename = paste0(rv$prefix_output, ".isoform_info.tsv"),
+    filename = function(){paste0(rv$prefix_output, ".isoform_info.tsv")},
     content = function(file){write.table(rv$isoforms_information, file, sep = "\t", quote = F, row.names = F, col.names = T)}
   )
   # Isoform information (GTF)
   output$download_iso_information_gtf <- downloadHandler(
-    filename = paste0(rv$prefix_output, ".isoform_info.gtf"),
+    filename = function(){paste0(rv$prefix_output, ".isoform_info.gtf")},
     content = function(file){write.table(isoinfo2gtf(rv$isoforms_information, rv$exon_information, input$selectgene), 
                                          file, sep = "\t", quote = F, row.names = F, col.names = F)}
   )
   # Read clasification
   output$download_read_clasification <- downloadHandler(
-    filename = paste0(rv$prefix_output, ".read_clasification.tsv"),
+    filename = function(){paste0(rv$prefix_output, ".read_clasification.tsv")},
     content = function(file){write.table(read_clasification_fun(all_ids = rv$data$id, no_consensus_ids = rv$defined_exons[[2]], classified_ids = rv$isoforms_filtered[[2]], not_full_length = rv$isoforms_filtered[[3]], iso_dict = rv$isoforms_information), 
                                          file, sep = "\t", quote = F, row.names = F, col.names = T)}
   )

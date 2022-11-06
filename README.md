@@ -43,7 +43,7 @@ Click on 'Browse...' button to navigate to your file system to upload your align
 [![default_analysis_VIsoQLR](https://github.com/TBLabFJD/VIsoQLR/blob/main/images/default_analysis_VIsoQLR.png?raw=true)](https://github.com/TBLabFJD/VIsoQLR/tree/main/images/default_analysis_VIsoQLR.png)
 
 
-To know more about VIsoQLR have a look at the manuscript in bioRxiv
+To know more about VIsoQLR have a look at the manuscript in bioRxiv: https://www.biorxiv.org/content/10.1101/2022.03.01.482488v2
 
 
 

@@ -35,7 +35,8 @@ RUN R -e "reticulate::use_miniconda('r-reticulate')"
 # ENV PATH=$CONDA_DIR/bin:$PATH
 # RUN conda install -c conda-forge python-kaleido
 
-
+RUN apt-get update && apt-get install -y \
+    bedtools
 
 
 # copy the app directory into the image
