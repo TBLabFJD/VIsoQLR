@@ -16,7 +16,7 @@ library(RColorBrewer)
 
 rm(list=ls()) 
 
-options(shiny.maxRequestSize=10000*1024^2)
+options(shiny.maxRequestSize=30000*1024^2)
 reticulate::py_run_string("import sys")
 
 
@@ -804,26 +804,60 @@ isoinfo2gtf <- function(isoforms_information, exon_information, selected_gene){
 #############################################################################################
 
 ui <- fluidPage(
-  titlePanel("VIsoQLR"),
-  
-  sidebarLayout(
-    sidebarPanel(
-      width=2,
-      
-      wellPanel(
-        h3("Input"),
-        radioButtons("inputtype", "Input format", c("GFF3", "BED6", "BAM"), selected="GFF3"),
-        fileInput("inputfile", "Input file")
-        # fileInput("reference", "Reference sequence")
+  navbarPage(
+    title = "VIsoQLR",
+    selected = "Isoform analysis",
+    
+    tabPanel("Mapping",
+      mainPanel(
+       width = 3, class = "well",
+       h3("GMAP reference index building"),
+       fileInput("fasta2index", "Reference sequence(s) in FASTA format"),
+       uiOutput("wait_gmap_index_download")
       ),
-      uiOutput("input_wait_sidebarpanel"),
+      
+      mainPanel(
+        width = 3, class = "well",
+        h3("GMAP mapping"),
+        radioButtons("output_format_gmap", "Output format", c("GFF3", "BED6", "BAM"), selected="GFF3"),
+        fileInput("reference_gmap", "Reference index in ZIP format (file generated in the first column)"),
+        fileInput("rawreads_gmap", "Raw reads in FASTQ format"),
+        actionButton("run_gmap_alignment", "Run mapping"),
+        uiOutput("wait_gmap_mapping_download")
+      ),
+      
+      mainPanel(
+        width = 3, class = "well",
+        h3("Minimap2 mapping"),
+        radioButtons("output_format_minimap", "Output format", c("BED6", "BAM"), selected="BED6"),
+        fileInput("reference_minimap", "Reference sequence(s) in FASTA format"),
+        fileInput("rawreads_minimap", "Raw reads in FASTQ format"),
+        actionButton("run_minimap_alignment", "Run mapping"),
+        uiOutput("wait_minimap_mapping_download")
+      ) 
     ),
     
-    mainPanel(
-      width = 10,
-      uiOutput("input_wait_mainpanel"),
-      ))
-)
+    
+    tabPanel("Isoform analysis",
+      sidebarLayout(
+        sidebarPanel(
+          width=2,
+          
+          wellPanel(
+            h3("Input"),
+            radioButtons("inputtype", "Input format", c("GFF3", "BED6", "BAM"), selected="GFF3"),
+            fileInput("inputfile", "Input file")
+            # fileInput("reference", "Reference sequence")
+          ),
+          uiOutput("input_wait_sidebarpanel"),
+        ),
+        
+        mainPanel(
+          width = 10,
+          uiOutput("input_wait_mainpanel"),
+          ))
+      )
+))
 
 
 
@@ -839,8 +873,192 @@ ui <- fluidPage(
 
 server <- function(input, output) {
   
+  rv <- reactiveValues(data = NULL, orig=NULL)
   
-  output$input_wait_sidebarpanel<-renderUI({
+  #=========#
+  # Mapping #
+  #=========#
+
+
+  # GMAP index building
+  observeEvent(ignoreInit=T, c( 
+    input$fasta2index
+  ),{ 
+    
+    rv$index2download <- NULL
+    
+    file <- input$fasta2index
+    ext <- tools::file_ext(file$datapath)
+    
+    print("GMAP index building (prerequisite)")
+    req(file)
+    
+    withProgress(message = 'GMAP index building', value = 1/2, {
+
+      validate(need(ext %in% c("fasta", "fa"), "Please upload a FASTA file"))
+      
+      prefix=gsub("(.fasta|.fa)$", "", file$name, perl = T)
+      system(paste0("gmap_build -D ./ -d ", prefix, " " , file$datapath))
+      system(paste0("zip ", prefix, ".zip ./", prefix, "/*"))
+      rv$index2download = paste0(prefix, ".zip")
+
+    })
+    print("GMAP index building")
+  })
+  
+  
+  output$wait_gmap_index_download<-renderUI({
+    req(rv$index2download)
+    tagList(
+      downloadButton("download_gmap_index", "Download GMAP index (.zip)")
+    )
+  })
+  
+  
+  output$download_gmap_index <- downloadHandler(
+    filename = function(){rv$index2download},
+    content = function(file){file.copy(paste0("./", rv$index2download), file)}
+  )
+  
+  
+  
+  
+  # GMAP mapping
+  
+  observeEvent(ignoreInit=T, c( 
+    input$run_gmap_alignment
+  ),{ 
+    
+    rv$gmap2download <- NULL
+    
+    index_file <- input$reference_gmap
+    index_ext <- tools::file_ext(index_file$datapath)
+    
+    reads_file <- input$rawreads_gmap
+    reads_ext <- tools::file_ext(reads_file$datapath)
+    
+    print("GMAP mapping (prerequisite)")
+    req(index_file)
+    req(reads_file)
+    req(input$output_format_gmap)
+    
+    withProgress(message = 'GMAP mapping', value = 1/2, {
+
+      validate(need(index_ext %in% c("zip"), "Please upload a ZIP file"))
+      validate(need(reads_ext %in% c("fastq", "fq", "gz", "fastq.gz", "fq.gz"), "Please upload a FASTQ file"))
+      
+      system(paste0("unzip -o " , index_file$datapath))
+      index_prefix = system("ls -rt | tail -n 1", intern = T)
+
+      if (grepl(".gz$", reads_file$name, perl = T)) { cat_type = "zcat " } else { cat_type = "cat " }
+      sample_prefix = gsub("(.fastq|.fq|.fastq.gz|.fq.gz)$", "", reads_file$name, perl = T)
+      
+      if (input$output_format_gmap == "GFF3"){
+        rv$gmap2download = paste0(sample_prefix, ".gff3")
+        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f 2 -z auto -D ./ -d ", index_prefix, " > ", rv$gmap2download, " 2> log.err"))
+        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f 2 -z auto -D ./ -d ", index_prefix, " > ", rv$gmap2download, " 2> log.err"))
+      
+      } else if (input$output_format_gmap == "BAM"){
+        rv$gmap2download = paste0(sample_prefix, ".bam")
+        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort > ", rv$gmap2download))
+        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort > ", rv$gmap2download))
+
+      } else if (input$output_format_gmap == "BED6"){
+        rv$gmap2download = paste0(sample_prefix, ".bed6")
+        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort | bamToBed -split -i stdin > ", rv$gmap2download))
+        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort | bamToBed -split -i stdin > ", rv$gmap2download))
+        
+      }
+        
+    })
+    print("GMAP mapping")
+  })
+  
+ 
+  output$wait_gmap_mapping_download<-renderUI({
+    req(rv$gmap2download)
+    tagList(
+      downloadButton("download_gmap_reads", "Download aligned reads")
+    )
+  })
+ 
+  
+  output$download_gmap_reads <- downloadHandler(
+    filename = function(){rv$gmap2download},
+    content = function(file){file.copy(paste0("./", rv$gmap2download), file)}
+  )
+  
+  
+  
+  
+  
+  
+  # Minimap2 mapping
+  
+  observeEvent(ignoreInit=T, c( 
+    input$run_minimap_alignment
+  ),{ 
+    
+    rv$minimap2download <- NULL
+    
+    index_file <- input$reference_minimap
+    index_ext <- tools::file_ext(index_file$datapath)
+    
+    reads_file <- input$rawreads_minimap
+    reads_ext <- tools::file_ext(reads_file$datapath)
+    
+    print("minimap mapping (prerequisite)")
+    req(index_file)
+    req(reads_file)
+    req(input$output_format_minimap)
+    
+    withProgress(message = 'Minimap2 mapping', value = 1/2, {
+
+      validate(need(index_ext %in% c("fa", "fasta"), "Please upload a ZIP file"))
+      validate(need(reads_ext %in% c("fastq", "fq", "gz", "fastq.gz", "fq.gz"), "Please upload a FASTQ file"))
+      
+      
+      if (grepl(".gz$", reads_file$name, perl = T)) { cat_type = "zcat " } else { cat_type = "cat " }
+      sample_prefix = gsub("(.fastq|.fq|.fastq.gz|.fq.gz)$", "", reads_file$name, perl = T)
+      
+      if (input$output_format_minimap == "BAM"){
+        rv$minimap2download = paste0(sample_prefix, ".bam")
+        print(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " > ", rv$minimap2download ))
+        system(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " > ", rv$minimap2download ))
+        
+      } else if (input$output_format_minimap == "BED6"){
+        rv$minimap2download = paste0(sample_prefix, ".bed6")
+        print(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " | bamToBed -split -i stdin > ", rv$minimap2download ))
+        system(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " | bamToBed -split -i stdin > ", rv$minimap2download ))
+      }
+      
+    })
+    print("Minimap2 mapping")
+  })
+  
+  output$wait_minimap_mapping_download<-renderUI({
+    req(rv$minimap2download)
+    tagList(
+      downloadButton("downloadminimap_reads", "Download GMAP index (.zip)")
+    )
+    
+    output$downloadminimap_reads <- downloadHandler(
+      filename = function(){rv$minimap2download},
+      content = function(file){file.copy(paste0("./", rv$minimap2download), file)}
+    )
+  })
+  
+  
+  
+  
+  
+  
+  
+  #===================#
+  # Isoform detection #  
+  #===================#
+
+    output$input_wait_sidebarpanel<-renderUI({
     req(input$inputfile)
     tagList(
       
@@ -855,7 +1073,7 @@ server <- function(input, output) {
         h3("Exon coordinates"),
         wellPanel(
           h4("Automatic detection"),
-          numericInput("peak_threshold", "Read threshold (%)", min = 0, max = 100, value = 3),
+          numericInput("peak_threshold", "Read threshold (%)", min = 0, max = 100, value = 2),
           numericInput("padding", "Padding (# of bases)", min = 0, step = 1, value = 5),
           numericInput("very_close_bp", "Merge close splice sites (# of bases)", min = 0, step = 1, value = 3),
           actionButton("peak_detection_apply", "Apply")
@@ -982,7 +1200,6 @@ server <- function(input, output) {
   
   
   
-  rv <- reactiveValues(data = NULL, orig=NULL)
   
   
   ######################

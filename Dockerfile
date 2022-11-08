@@ -36,7 +36,17 @@ RUN R -e "reticulate::use_miniconda('r-reticulate')"
 # RUN conda install -c conda-forge python-kaleido
 
 RUN apt-get update && apt-get install -y \
-    bedtools
+    bedtools \
+    samtools \
+    gmap \
+    curl
+
+
+RUN curl -L https://github.com/lh3/minimap2/releases/download/v2.24/minimap2-2.24_x64-linux.tar.bz2 | tar -jxvf -
+ENV PATH="${PATH}:${PWD}/minimap2-2.24_x64-linux/"
+
+
+
 
 
 # copy the app directory into the image
