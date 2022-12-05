@@ -2,6 +2,7 @@
 
 VIsoQLR is an interactive analyzer, viewer and editor for the semi-automated identification and quantification of known and novel isoforms using long-read sequencing data. VIsoQLR is tailored to thoroughly analyze mRNA expression and maturation in low-throughput splicing assays. This tool takes sequences aligned to a reference, defines consensus splice sites, and quantifies isoforms. Users can edit splice sites through dynamic and interactive graphics and tables as part of their manual curation. Known transcripts, or isoforms detected by other methods, can also be imported as references for comparison.
 
+[![IMAGE ALT TEXT](http://img.youtube.com/vi/5fBis04A_WA/0.jpg)](http://www.youtube.com/watch?v=5fBis04A_WA "VIsoQLR: an interactive tool for the detection and quantification of isoforms using long-read seq")
 
 ## Developers
 ### Main developers
