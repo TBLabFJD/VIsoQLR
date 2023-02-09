@@ -110,20 +110,20 @@ break_point_calculation  <- function(raw_exons, num_reads_post_trimming, breakpo
     if (breakpoint_padding >= very_close_bp){
       
       start_pos_to_remove=c()
-      for (i in 1:(nrow(start_position)-1)){
+      for (i in 1:(nrow(start_position))){
         
         if (is.element(TRUE, start_position[i, "breakp"] + very_close_bp >= start_position[-i, "breakp"] & 
                        start_position[i, "breakp"] - very_close_bp <= start_position[-i, "breakp"] &
-                       start_position[i, "freq"] <= start_position[-i, "freq"])) {start_pos_to_remove = c(start_pos_to_remove, i)}
+                       start_position[i, "freq"] < start_position[-i, "freq"])) {start_pos_to_remove = c(start_pos_to_remove, i)}
                        # start_position[i, "freq"] * 2 <= start_position[, "freq"])) {start_pos_to_remove = c(start_pos_to_remove, i)}
       }
       if (!is.null(start_pos_to_remove)) {start_position = start_position[-start_pos_to_remove,]}
       
       end_pos_to_remove=c()
-      for (i in 1:(nrow(end_position)-1)){
+      for (i in 1:(nrow(end_position))){
         if (is.element(TRUE, end_position[i, "breakp"] + very_close_bp >= end_position[-i, "breakp"] & 
                        end_position[i, "breakp"] - very_close_bp <= end_position[-i, "breakp"] &
-                       end_position[i, "freq"] <= end_position[-i, "freq"])) {end_pos_to_remove = c(end_pos_to_remove, i)}
+                       end_position[i, "freq"] < end_position[-i, "freq"])) {end_pos_to_remove = c(end_pos_to_remove, i)}
                        # end_position[i, "freq"] * 2 <= end_position[, "freq"])) {end_pos_to_remove = c(end_pos_to_remove, i)}
       }
       if (!is.null(end_pos_to_remove)) {end_position = end_position[-end_pos_to_remove,]}
@@ -809,7 +809,8 @@ ui <- fluidPage(
     selected = "Isoform analysis",
     
     tabPanel("Mapping",
-      mainPanel(
+      
+       mainPanel(
        width = 3, class = "well",
        h3("GMAP reference index building"),
        fileInput("fasta2index", "Reference sequence(s) in FASTA format"),
@@ -822,8 +823,12 @@ ui <- fluidPage(
         radioButtons("output_format_gmap", "Output format", c("GFF3", "BED6", "BAM"), selected="GFF3"),
         fileInput("reference_gmap", "Reference index in ZIP format (file generated in the first column)"),
         fileInput("rawreads_gmap", "Raw reads in FASTQ format"),
+        numericInput("gmap_threads", "Number of threads", min = 1, value = 4),
         actionButton("run_gmap_alignment", "Run mapping"),
-        uiOutput("wait_gmap_mapping_download")
+        h4("Download aligned reads"),
+        uiOutput("wait_gmap_mapping_download"),
+        h4("Download bam index (.bai)"),
+        uiOutput("wait_gmap_mapping_download_bai")
       ),
       
       mainPanel(
@@ -832,8 +837,12 @@ ui <- fluidPage(
         radioButtons("output_format_minimap", "Output format", c("BED6", "BAM"), selected="BED6"),
         fileInput("reference_minimap", "Reference sequence(s) in FASTA format"),
         fileInput("rawreads_minimap", "Raw reads in FASTQ format"),
+        numericInput("minimap_threads", "Number of threads", min = 1, value = 4),
         actionButton("run_minimap_alignment", "Run mapping"),
-        uiOutput("wait_minimap_mapping_download")
+        h4("Download aligned reads"),
+        uiOutput("wait_minimap_mapping_download"),
+        h4("Download bam index (.bai)"),
+        uiOutput("wait_minimap_mapping_download_bai")
       ) 
     ),
     
@@ -929,7 +938,10 @@ server <- function(input, output) {
     input$run_gmap_alignment
   ),{ 
     
+    if (is.null(input$gmap_threads)) gmap_threads = 4 else gmap_threads = input$gmap_threads
+    
     rv$gmap2download <- NULL
+    rv$gmap2download_bai <- NULL
     
     index_file <- input$reference_gmap
     index_ext <- tools::file_ext(index_file$datapath)
@@ -955,18 +967,22 @@ server <- function(input, output) {
       
       if (input$output_format_gmap == "GFF3"){
         rv$gmap2download = paste0(sample_prefix, ".gff3")
-        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f 2 -z auto -D ./ -d ", index_prefix, " > ", rv$gmap2download, " 2> log.err"))
-        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f 2 -z auto -D ./ -d ", index_prefix, " > ", rv$gmap2download, " 2> log.err"))
+        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t ", gmap_threads, " --cross-species --gff3-add-separators=0 -f 2 -z auto -D ./ -d ", index_prefix, " > ", rv$gmap2download, " 2> log.err"))
+        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t ", gmap_threads, " --cross-species --gff3-add-separators=0 -f 2 -z auto -D ./ -d ", index_prefix, " > ", rv$gmap2download, " 2> log.err"))
       
       } else if (input$output_format_gmap == "BAM"){
         rv$gmap2download = paste0(sample_prefix, ".bam")
-        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort > ", rv$gmap2download))
-        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort > ", rv$gmap2download))
+        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t ", gmap_threads, " --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort > ", rv$gmap2download))
+        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t ", gmap_threads, " --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort > ", rv$gmap2download))
 
+        rv$gmap2download_bai = paste0(sample_prefix, ".bam.bai")
+        print(paste0("samtools index ", rv$gmap2download))
+        system(paste0("samtools index ", rv$gmap2download))
+        
       } else if (input$output_format_gmap == "BED6"){
         rv$gmap2download = paste0(sample_prefix, ".bed6")
-        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort | bamToBed -split -i stdin > ", rv$gmap2download))
-        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t 4 --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort | bamToBed -split -i stdin > ", rv$gmap2download))
+        print(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t ", gmap_threads, " --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort | bamToBed -split -i stdin > ", rv$gmap2download))
+        system(paste0(cat_type, reads_file$datapath, " | gmap -n1 -t ", gmap_threads, " --cross-species --gff3-add-separators=0 -f samse -z auto -D ./ -d ", index_prefix, "  2> log.err | samtools view -Su | samtools sort | bamToBed -split -i stdin > ", rv$gmap2download))
         
       }
         
@@ -978,7 +994,7 @@ server <- function(input, output) {
   output$wait_gmap_mapping_download<-renderUI({
     req(rv$gmap2download)
     tagList(
-      downloadButton("download_gmap_reads", "Download aligned reads")
+      downloadButton("download_gmap_reads", label = "Download aligned reads")
     )
   })
  
@@ -987,6 +1003,21 @@ server <- function(input, output) {
     filename = function(){rv$gmap2download},
     content = function(file){file.copy(paste0("./", rv$gmap2download), file)}
   )
+  
+  
+  
+  output$wait_gmap_mapping_download_bai<-renderUI({
+    req(rv$gmap2download_bai)
+    tagList(
+      downloadButton("downloadgmap_reads_bai", label = "Download bam index (.bai)")
+    )
+    
+    output$downloadgmap_reads_bai <- downloadHandler(
+      filename = function(){rv$gmap2download_bai},
+      content = function(file){file.copy(paste0("./", rv$gmap2download_bai), file)}
+    )
+  })
+  
   
   
   
@@ -999,7 +1030,10 @@ server <- function(input, output) {
     input$run_minimap_alignment
   ),{ 
     
+    if (is.null(input$minimap_threads)) minimap_threads = 4 else minimap_threads = input$minimap_threads
+    
     rv$minimap2download <- NULL
+    rv$minimap2download_bai <- NULL
     
     index_file <- input$reference_minimap
     index_ext <- tools::file_ext(index_file$datapath)
@@ -1023,13 +1057,17 @@ server <- function(input, output) {
       
       if (input$output_format_minimap == "BAM"){
         rv$minimap2download = paste0(sample_prefix, ".bam")
-        print(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " > ", rv$minimap2download ))
-        system(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " > ", rv$minimap2download ))
+        print(paste0("minimap2 -ax splice --secondary=no -t ", minimap_threads, " ", index_file$datapath, " ", reads_file$datapath, " > ", rv$minimap2download ))
+        system(paste0("minimap2 -ax splice --secondary=no -t ", minimap_threads, " ", index_file$datapath, " ", reads_file$datapath, " > ", rv$minimap2download ))
+        
+        rv$minimap2download_bai = paste0(sample_prefix, ".bam.bai")
+        print(paste0("samtools index ", rv$minimap2download))
+        system(paste0("samtools index ", rv$minimap2download))
         
       } else if (input$output_format_minimap == "BED6"){
         rv$minimap2download = paste0(sample_prefix, ".bed6")
-        print(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " | bamToBed -split -i stdin > ", rv$minimap2download ))
-        system(paste0("minimap2 -ax splice --secondary=no -t 4 ", index_file$datapath, " ", reads_file$datapath, " | bamToBed -split -i stdin > ", rv$minimap2download ))
+        print(paste0("minimap2 -ax splice --secondary=no -t ", minimap_threads, " ", index_file$datapath, " ", reads_file$datapath, " | bamToBed -split -i stdin > ", rv$minimap2download ))
+        system(paste0("minimap2 -ax splice --secondary=no -t ", minimap_threads, " ", index_file$datapath, " ", reads_file$datapath, " | bamToBed -split -i stdin > ", rv$minimap2download ))
       }
       
     })
@@ -1039,12 +1077,24 @@ server <- function(input, output) {
   output$wait_minimap_mapping_download<-renderUI({
     req(rv$minimap2download)
     tagList(
-      downloadButton("downloadminimap_reads", "Download GMAP index (.zip)")
+      downloadButton("downloadminimap_reads", label = "Download aligned reads")
     )
     
     output$downloadminimap_reads <- downloadHandler(
       filename = function(){rv$minimap2download},
       content = function(file){file.copy(paste0("./", rv$minimap2download), file)}
+    )
+  })
+  
+  output$wait_minimap_mapping_download_bai<-renderUI({
+    req(rv$minimap2download_bai)
+    tagList(
+      downloadButton("downloadminimap_reads_bai", label = "Download bam index (.bai)")
+    )
+    
+    output$downloadminimap_reads_bai <- downloadHandler(
+      filename = function(){rv$minimap2download_bai},
+      content = function(file){file.copy(paste0("./", rv$minimap2download_bai), file)}
     )
   })
   
