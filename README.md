@@ -4,6 +4,12 @@ VIsoQLR is an interactive analyzer, viewer and editor for the semi-automated ide
 
 A command line version is available at https://github.com/TBLabFJD/Mini-IsoQLR
 
+#### Cite this article
+To know more about VIsoQLR have a look at the article in Human Genetics: https://link.springer.com/article/10.1007/s00439-023-02539-z
+
+Núñez-Moreno G, Tamayo A, Ruiz-Sánchez C, Cortón M, Mínguez P. VIsoQLR: an interactive tool for the detection, quantification and fine-tuning of isoforms in selected genes using long-read sequencing. Hum Genet. 2023 Mar 7. doi: 10.1007/s00439-023-02539-z. Epub ahead of print. PMID: 36881176.
+
+
 ## Check our video tutorial
 [![IMAGE ALT TEXT](http://img.youtube.com/vi/5fBis04A_WA/0.jpg)](http://www.youtube.com/watch?v=5fBis04A_WA "VIsoQLR: an interactive tool for the detection and quantification of isoforms using long-read seq")
 
@@ -63,6 +69,5 @@ One initiated click on "Mapping" in the top-left. You should see something like:
 The screen is divided in 3 panels. The first one is used to build the reference index used by GMAP by uploading the reference sequence(s). Once you upload your sequence(s) the index building will start automatically. Once is complete, a download bottom will appear on the screen. The second panel is dedicated to align the raw reads (in FASTQ format) using GMAP. To do so, upload the ZIP file downloaded from the previous panel as the reference index, the FASTQ file, chose the number of threads and click `Run mapping`. Once the reads alignment is done, a download bottom will appear to retrieve the mapped sequences. In case of selecting the BAM option as an output, two download bottoms will appear: the mapped reads (BAM) and its index (BAI). The BAI file is require, for example, to upload the BAM file in IGV. The last column performs the alignment using Minimap2. In this case the reference must be in FASTA format (the same file used to build the GMAP index in the first panel). Although two major solutions for the alignment are made available, we recommend using GMAP as Minimap2 has problem aligning small exons. This limitation is advised in their GitHub (https://github.com/lh3/minimap2), in the “Limitations” section.
 
 
-To know more about VIsoQLR have a look at the manuscript in bioRxiv: https://www.biorxiv.org/content/10.1101/2022.03.01.482488v2
 
 
